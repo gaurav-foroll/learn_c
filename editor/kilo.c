@@ -15,12 +15,25 @@
 
 /*** defines ***/ 
 
+#define KILO_VERSION "0.0.1" 
+
 #define CTRL_KEY(k) ((k) & 0x1f)
+
+enum editorKey {
+
+    ARROW_LEFT = 1000, // gave these higher values so that they don't conflict with char keys
+    ARROW_RIGHT, // same as 1001
+    ARROW_UP,   // same as 1002
+    ARROW_DOWN // same as 1003
+
+};
+
 
 /*** data ***/
 
 struct editorConfig {
-
+    
+    int cx, cy; 
     int screenrows;
     int screencols;
     struct termios orig_termios;
@@ -63,22 +76,41 @@ void enableRawMode(void) {
     raw.c_cflag |= (CS8);
     raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG); // bit mask and to turn of echo mode
 
-    raw.c_cc[VMIN] = 0;  //even if input is 0 bytes it will work 
-    raw.c_cc[VTIME] = 1; // 0.1 sec timeout this helps with handling escape charaters and also helps us with doing some animation or indicator like waiting or smthng
+    raw.c_cc[VMIN] = 0;  // even if input is 0 bytes it will work 
+    raw.c_cc[VTIME] = 1; // 0.1 sec timeout this helps with handling escape charaters like control, pageup etc and also helps us with doing some animation or indicator like waiting or smthng
     
     if(tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) die("tcsetattr"); //tcsaflush will clear the input buffer it is an action not a mode or a flag 
 }
 
 
 
-char editorReadKey(void) {
+int editorReadKey(void) {  //changed return type from char to int to handle editor keys
 
     int nread;
     char c;
     while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
         if(nread == -1 && errno != EAGAIN) die("read");
     }
-    return c;
+
+    if (c == '\x1b') {
+        char seq[3];
+
+        if(read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b';
+        if(read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
+
+        if (seq[0] == '[') {
+
+            switch (seq[1]) {
+                case 'A' : return ARROW_UP;
+                case 'B' :  return ARROW_DOWN;
+                case 'C' : return ARROW_RIGHT;
+                case 'D' : return ARROW_LEFT;
+            }
+        }
+        return '\x1b';
+    } else {
+        return c;
+    }
 
 }
 
@@ -166,25 +198,51 @@ void abFree(struct abuf* ab) {
 
 /*** output ***/
 
-void editorDrawRows(void) {
+void editorDrawRows(struct abuf* ab) {
     int y;
     for(y = 0; y < E.screenrows; y++) {
 
-        write(STDIN_FILENO, "~", 1);
+        if(y == E.screenrows/3) {
+            char welcome[80];
+            int welcomelen = snprintf(welcome, sizeof(welcome), "kilo editor -- version %s", KILO_VERSION);
 
+            if(welcomelen > E.screencols) welcomelen = E.screencols;
+
+            int padding = (E.screencols - welcomelen)/2;
+            if(padding) {
+                abAppend(ab, "~", 1);
+                padding--;
+            }
+            while (padding--) abAppend(ab, " ", 1);
+            abAppend(ab, welcome, welcomelen);
+        } else {
+    	    abAppend(ab, "~", 1);
+        }
+
+
+        abAppend(ab, "\x1b[K", 3);
         if(y < E.screenrows -1) {
-            write(STDIN_FILENO, "\r\n", 2);
+		    abAppend(ab, "\r\n", 2);
         }
     }
 }
 
 
 void editorRefreshScreen(void) {
-    write(STDIN_FILENO, "\x1b[2J", 4);
-    write(STDIN_FILENO, "\x1b[H", 3);
+    struct abuf ab = ABUF_INIT;
+
+    abAppend(&ab, "\x1b[?25l", 6); // hide cursor so flickers are not shown 
+    // abAppend(&ab, "\x1b[2J", 4); // we don't want to clear entire screen 
+    abAppend(&ab, "\x1b[H", 3);
     
-    editorDrawRows(); // draw ~ in each row
-    write(STDIN_FILENO, "\x1b[H", 3);
+    editorDrawRows(&ab); // draw ~ in each row
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    abAppend(&ab, buf, strlen(buf));
+    abAppend(&ab, "\x1b[?25h", 6);
+    write(STDIN_FILENO, ab.b, ab.len);
+    abFree(&ab);
 }
 
 
@@ -192,9 +250,40 @@ void editorRefreshScreen(void) {
 
 /*** input ***/
 
+
+void editorMoveCursor(int key) {
+
+    switch(key) {
+
+        case ARROW_LEFT:
+            if (E.cx != 0) {
+                E.cx--;
+            }
+            break;
+        case ARROW_RIGHT:
+            if (E.cx != E.screencols - 1) {
+                E.cx++;
+            }
+            break;
+        case ARROW_UP:
+            if (E.cy != 0) {
+                E.cy--;
+            }
+            break;
+        case ARROW_DOWN:
+            if (E.cy != E.screenrows - 1) {
+                E.cy++;
+            }
+            break;
+    }
+
+
+}
+
+
 void editorProcessKeyPress(void) {
 
-    char c = editorReadKey();
+    int c = editorReadKey();
 
     switch(c) {
 
@@ -202,6 +291,13 @@ void editorProcessKeyPress(void) {
             write(STDIN_FILENO, "\x1b[2J", 4); // clear screen 
             write(STDIN_FILENO, "\x1b[H", 3); // put cursor at top left position default (1,1)
             exit(0);
+            break;
+
+        case ARROW_UP:
+        case ARROW_LEFT:
+        case ARROW_DOWN:
+        case ARROW_RIGHT:
+            editorMoveCursor(c);
             break;
     }
 }
@@ -211,6 +307,9 @@ void editorProcessKeyPress(void) {
 /*** init ***/
 
 void initEditor(void) {
+
+    E.cx = 0;
+    E.cy = 0;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
 }
 
