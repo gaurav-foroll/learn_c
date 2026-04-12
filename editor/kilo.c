@@ -4,7 +4,7 @@
 
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
-#define _GNU_SOURCE
+#define _GNU_SOURCE // since getline is not a part of stdlib it part of posix hence we need this
 
 #include <stdio.h>
 #include <ctype.h>
@@ -53,7 +53,7 @@ struct editorConfig {
     int screenrows;
     int screencols;
     int numrows;
-    erow row;
+    erow* row; // make row an array of of erow structs  
     struct termios orig_termios;
 
 };
@@ -183,20 +183,6 @@ int getCursorPosition(int* rows, int* cols) {
     if(buf[0] != '\x1b' || buf[1] != '[') return -1;
     if(sscanf(&buf[2], "%d;%d", rows, cols) != 2) return -1;
 
-    // printf("\r\n");
-    // char c;
-    // while(read(STDIN_FILENO, &c, 1) == 1) {
-
-    //     if(iscntrl(c)) {
-
-    //         printf("%d\r\n", c);
-
-    //     } else {
-
-    //         printf("%d ('%c')\r\n", c, c);
-
-    //     }
-    // }
 
     return 0;
 }
@@ -218,6 +204,21 @@ int getWindowSize(int* rows, int* cols) {
     }
 }
 
+
+/*** row operations ***/
+
+void editorAppendRow(char* s, size_t len) {
+    E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+    int at = E.numrows;
+    E.row[at].size = len;
+    E.row[at].chars = malloc(len + 1); 
+    memcpy(E.row[at].chars, s, len);
+    E.row[at].chars[len] = '\0';
+    E.numrows++;
+}
+
+
+
 /*** file i/o ***/
 
 void editorOpen(char* filename) {
@@ -230,16 +231,12 @@ void editorOpen(char* filename) {
     size_t linecap = 0;
     ssize_t linelen;
 
-    linelen = getline(&line, &linecap, fp);
+    
 
-    if(linelen != -1) {
+    while((linelen = getline(&line, &linecap, fp)) != -1) {
         while (linelen > 0 && (line[linelen - 1] == '\n'|| line[linelen - 1] == '\r')) linelen--;
         
-        E.row.size = linelen;
-        E.row.chars = malloc(linelen + 1);
-        memcpy(E.row.chars, line, linelen);
-        E.row.chars[linelen] = '\0';
-        E.numrows = 1;
+        editorAppendRow(line, linelen);
     
     }
     free(line);
@@ -282,7 +279,7 @@ void editorDrawRows(struct abuf* ab) {
     for(y = 0; y < E.screenrows; y++) {
 
         if(y >= E.numrows) {
-
+            // if we don't have a file we print this 
             if(E.numrows == 0 && y == E.screenrows/3) {
                 char welcome[80];
                 int welcomelen = snprintf(welcome, sizeof(welcome), "kilo editor -- version %s", KILO_VERSION);
@@ -302,9 +299,9 @@ void editorDrawRows(struct abuf* ab) {
 
         } else {
 
-            int len = E.row.size;
+            int len = E.row[y].size;
             if(len > E.screencols) len = E.screencols;
-            abAppend(ab, E.row.chars, len);
+            abAppend(ab, E.row[y].chars, len);
         }
 
         abAppend(ab, "\x1b[K", 3);
@@ -419,6 +416,7 @@ void initEditor(void) {
     E.cx = 0;
     E.cy = 0;
     E.numrows = 0;
+    E.row = NULL;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
 }
 
