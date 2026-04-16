@@ -50,6 +50,7 @@ typedef struct erow {
 struct editorConfig {
     
     int cx, cy; 
+    int rowoff; // this actually gives us the screen offset value for actual row user is on we take filerow below
     int screenrows;
     int screencols;
     int numrows;
@@ -274,11 +275,24 @@ void abFree(struct abuf* ab) {
 
 /*** output ***/
 
+void editorScroll(void) {
+
+    if(E.cy < E.rowoff) {
+        E.rowoff = E.cy;
+    }
+    if(E.cy >= E.rowoff + E.screenrows) {
+
+        E.rowoff = E.cy - E.screenrows + 1;
+    }
+}
+
 void editorDrawRows(struct abuf* ab) {
     int y;
     for(y = 0; y < E.screenrows; y++) {
 
-        if(y >= E.numrows) {
+        int filerow = y + E.rowoff;
+
+        if(filerow >= E.numrows) {
             // if we don't have a file we print this 
             if(E.numrows == 0 && y == E.screenrows/3) {
                 char welcome[80];
@@ -299,9 +313,9 @@ void editorDrawRows(struct abuf* ab) {
 
         } else {
 
-            int len = E.row[y].size;
+            int len = E.row[filerow].size;
             if(len > E.screencols) len = E.screencols;
-            abAppend(ab, E.row[y].chars, len);
+            abAppend(ab, E.row[filerow].chars, len);
         }
 
         abAppend(ab, "\x1b[K", 3);
@@ -309,12 +323,13 @@ void editorDrawRows(struct abuf* ab) {
 		    abAppend(ab, "\r\n", 2);
         }
 
-        
+    
     }
 }
 
 
 void editorRefreshScreen(void) {
+    editorScroll();
     struct abuf ab = ABUF_INIT;
 
     abAppend(&ab, "\x1b[?25l", 6); // hide cursor so flickers are not shown 
@@ -324,7 +339,7 @@ void editorRefreshScreen(void) {
     editorDrawRows(&ab); // draw ~ in each row
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, E.cx + 1);
     abAppend(&ab, buf, strlen(buf));
     abAppend(&ab, "\x1b[?25h", 6);
     write(STDIN_FILENO, ab.b, ab.len);
@@ -357,7 +372,7 @@ void editorMoveCursor(int key) {
             }
             break;
         case ARROW_DOWN:
-            if (E.cy != E.screenrows - 1) {
+            if (E.cy < E.numrows) {
                 E.cy++;
             }
             break;
@@ -415,6 +430,7 @@ void initEditor(void) {
 
     E.cx = 0;
     E.cy = 0;
+    E.rowoff = 0;
     E.numrows = 0;
     E.row = NULL;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
@@ -436,3 +452,38 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
+
+
+
+
+
+// File (full content)
+// filerow = rowoff + y
+// ────────────────────────────────────
+
+//           rowoff = 10
+//               ↓
+
+// filerow 10   → screen row 0   (y = 0)
+// filerow 11   → screen row 1   (y = 1)
+// filerow 12   → screen row 2   (y = 2)
+// filerow 13   → screen row 3   (y = 3)
+// filerow 14   → screen row 4   (y = 4)
+
+// ────────────────────────────────────
+
+
+
+
+// File (huge)
+// -------------------------
+// |                       |
+// |   rowoff → 10         |
+// |   ↓                   |
+// |   10  ← screen row 0  |
+// |   11  ← screen row 1  |
+// |   12  ← screen row 2  |
+// |   13  ← screen row 3  |
+// |   14  ← screen row 4  |
+// |                       |
+// -------------------------
