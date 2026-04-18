@@ -384,7 +384,7 @@ void editorDrawRows(struct abuf* ab) {
             abAppend(ab, &E.row[filerow].render[E.coloff], len); // handling linewise the amount of text to be displayed
         }
 
-        abAppend(ab, "\x1b[K", 3); // erase characters after cursor or else teh old line will remain
+        abAppend(ab, "\x1b[K", 3); // erase characters after cursor or else the old line will remain
         
 	    abAppend(ab, "\r\n", 2);
 
@@ -578,6 +578,7 @@ void initEditor(void) {
 int main(int argc, char* argv[]) {
 
     enableRawMode();
+    write(STDOUT_FILENO, "\x1b[2J", 4);
     initEditor();
     if(argc >= 2) {
         editorOpen(argv[1]);
