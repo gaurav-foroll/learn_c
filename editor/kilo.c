@@ -24,6 +24,7 @@
 
 #define KILO_VERSION "0.0.1" 
 #define KILO_TAB_STOP 4
+#define KILO_QUIT_TIMES 3
 
 #define CTRL_KEY(k) ((k) & 0x1f)
 
@@ -66,6 +67,7 @@ struct editorConfig {
     int screencols;
     int numrows;
     erow* row; // make row an array of of erow structs  
+    int dirty;
     char* filename;
     char statusmsg[80];
     time_t statusmsg_time;
@@ -76,6 +78,9 @@ struct editorConfig {
 struct editorConfig E;
 
 
+/*** prototypes ***/
+
+void editorSetStatusMessage(const char* fmt, ...);
 
 /*** terminal ***/
 
@@ -272,6 +277,7 @@ void editorAppendRow(char* s, size_t len) {
     E.row[at].render = NULL;
     editorUpdateRow(&E.row[at]);
     E.numrows++;
+    E.dirty++;
 }
 
 void editorRowInsertChar(erow* row, int at, int c) {
@@ -281,6 +287,7 @@ void editorRowInsertChar(erow* row, int at, int c) {
     row->size++;
     row->chars[at] = c;
     editorUpdateRow(row);
+    E.dirty++;
 }
 
 
@@ -335,6 +342,7 @@ void editorOpen(char* filename) {
     }
     free(line);
     fclose(fp);
+    E.dirty = 0;
     
 }
 
@@ -346,10 +354,21 @@ void editorSave(void) {
     char* buf = editorRowsToString(&len);
 
     int fd = open(E.filename, O_RDWR | O_CREAT, 0644);
-    ftruncate(fd, len);
-    write(fd, buf, len);
-    close(fd);
+
+    if(fd != -1) {
+        if(ftruncate(fd, len) != -1) {
+            if(write(fd, buf, len) == len) {
+                close(fd);
+                free(buf);
+                E.dirty = 0;
+                editorSetStatusMessage("%d bytes written to disk", len);
+                return;
+            }
+        }
+        close(fd);
+    }
     free(buf);
+    editorSetStatusMessage("can't save! I/O error %s", strerror(errno));
 }
 /* 
 The normal way to overwrite a file is to pass the O_TRUNC flag to open(), which truncates the file completely, making it an empty file, before writing the new data into it. By truncating the file ourselves to the same length as the data we are planning to write into it, we are making the whole overwriting operation a little bit safer in case the ftruncate() call succeeds but the write() call fails. In that case, the file would still contain most of the data it had before. But if the file was truncated completely by the open() call and then the write() failed, you’d end up with all of your data lost.
@@ -454,7 +473,7 @@ void editorDrawStatusBar(struct abuf* ab) {
     abAppend(ab, "\x1b[7m", 4);
 
     char status[80], rstatus[80];
-    int len = snprintf(status, sizeof(status), "%.20s - %d lines", E.filename ? E.filename : "[no name]", E.numrows);
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines %s", E.filename ? E.filename : "[no name]", E.numrows, E.dirty ? "(modified)":  "");
     int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numrows);
     if(len > E.screencols) len = E.screencols;
     abAppend(ab, status, len);
@@ -562,6 +581,8 @@ void editorMoveCursor(int key) {
 
 void editorProcessKeyPress(void) {
 
+    static int quit_times = KILO_QUIT_TIMES;
+
     int c = editorReadKey();
 
     switch(c) {
@@ -571,6 +592,11 @@ void editorProcessKeyPress(void) {
 
 
         case CTRL_KEY('q'):
+            if(E.dirty && quit_times > 0) {
+                editorSetStatusMessage("WARNING!!! file has unsaved changes. ""press ctrl-q %d more times to quit.", quit_times);
+                quit_times--;
+                return;
+            }
             write(STDIN_FILENO, "\x1b[2J", 4); // clear screen 
             write(STDIN_FILENO, "\x1b[H", 3); // put cursor at top left position default (1,1)
             exit(0);
@@ -633,6 +659,7 @@ void editorProcessKeyPress(void) {
             editorInsertChar(c);
             break;
     }
+    quit_times = KILO_QUIT_TIMES;
 }
 
 
@@ -648,6 +675,7 @@ void initEditor(void) {
     E.coloff = 0;
     E.numrows = 0;
     E.row = NULL;
+    E.dirty = 0;
     E.filename = NULL;
     E.statusmsg[0] = '\0';
     E.statusmsg_time = 0;;
@@ -664,7 +692,7 @@ int main(int argc, char* argv[]) {
         editorOpen(argv[1]);
     }
 
-    editorSetStatusMessage("help: ctrl-q = quit");
+    editorSetStatusMessage("help: ctrl-s = save | ctrl-q = quit");
 
     while(1) {
         editorRefreshScreen();
