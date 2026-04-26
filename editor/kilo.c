@@ -24,7 +24,7 @@
 
 #define KILO_VERSION "0.0.1" 
 #define KILO_TAB_STOP 4
-#define KILO_QUIT_TIMES 3
+#define KILO_QUIT_TIMES 1
 
 #define CTRL_KEY(k) ((k) & 0x1f)
 
@@ -51,7 +51,7 @@ typedef struct erow {
 
     int size;
     int rsize;
-    char *chars;
+    char* chars;
     char* render;
 
 
@@ -265,6 +265,25 @@ void editorUpdateRow(erow* row) {
 
 }
 
+void editorInsertRow(int at, char* s, size_t len) {
+
+    if(at < 0 || at > E.numrows) return;
+
+    E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+    memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at));
+    E.row[at].size = len;
+    E.row[at].chars = malloc(len + 1);
+    memcpy(E.row[at].chars, s, len);
+    E.row[at].chars[len] = '\0';
+    
+    E.row[at].rsize = 0;
+    E.row[at].render = NULL;
+    editorUpdateRow(&E.row[at]);
+
+    E.numrows++;
+    E.dirty++;
+}
+
 void editorAppendRow(char* s, size_t len) {
     E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
     int at = E.numrows;
@@ -298,13 +317,23 @@ void editorDelRow(int at) {
 void editorRowInsertChar(erow* row, int at, int c) {
     if(at < 0 || at >row->size) at = row->size;
     row->chars = realloc(row->chars, row->size + 2);
-    memmove(&row->chars[at+1], &row->chars[at], row->size - at + 1);
+    memmove(&row->chars[at+1], &row->chars[at], row->size - at + 1); // this also handles shifting all the rows up by one neat
     row->size++;
     row->chars[at] = c;
     editorUpdateRow(row);
     E.dirty++;
 }
 
+// backspace at the start of line is appending current line to the one above it deleting the current line and replacing it with one below it
+
+void editorRowAppendString(erow* row, char* s, size_t len) {
+    row->chars = realloc(row->chars, row->size + len + 1);
+    memcpy(&row->chars[row->size], s, len);
+    row->size += len;
+    row->chars[row->size] = '\0';
+    editorUpdateRow(row);
+    E.dirty++;
+}
 
 void editorRowDelChar(erow* row, int at) {
     if(at < 0 || at >= row->size) return;
@@ -317,7 +346,7 @@ void editorRowDelChar(erow* row, int at) {
 /*** editor operations ***/
 void editorInsertChar(int c) {
     if(E.cy == E.numrows) {
-        editorAppendRow("", 0);
+        editorInsertRow(E.numrows, "", 0);
     }
     editorRowInsertChar(&E.row[E.cy], E.cx, c);
     E.cx++;
@@ -325,11 +354,18 @@ void editorInsertChar(int c) {
 
 void editorDelChar(void) {
     if(E.cy == E.numrows) return;
+    if(E.cx == 0 && E.cy == 0) return;
 
     erow* row = &E.row[E.cy];
     if(E.cx > 0) {
         editorRowDelChar(row, E.cx - 1);
         E.cx--;
+    } else {
+
+        E.cx = E.row[E.cy - 1].size;
+        editorRowAppendString(&E.row[E.cy - 1], row->chars, row->size);
+        editorDelRow(E.cy);
+        E.cy--;
     }
 }
 
@@ -370,7 +406,7 @@ void editorOpen(char* filename) {
     while((linelen = getline(&line, &linecap, fp)) != -1) {
         while (linelen > 0 && (line[linelen - 1] == '\n'|| line[linelen - 1] == '\r')) linelen--;
         
-        editorAppendRow(line, linelen);
+        editorInsertRow(E.numrows, line, linelen);
     
     }
     free(line);
