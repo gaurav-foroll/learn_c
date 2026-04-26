@@ -1,4 +1,4 @@
-// kilo is the name of the editor from the tutorial 
+// kilo is the name of the editor from the tutorial
 
 /*** includes ***/
 
@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 #include <ctype.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -294,6 +295,25 @@ void editorInsertChar(int c) {
 
 /*** file i/o ***/
 
+char* editorRowsToString(int*buflen) {
+    int totlen = 0;
+    int j;
+    for(j = 0; j < E.numrows; j++)
+        totlen += E.row[j].size + 1;
+    *buflen = totlen;
+    
+    char* buf = malloc(totlen);
+    char* p = buf;
+    for(j = 0; j < E.numrows; j++) {
+        memcpy(p, E.row[j].chars, E.row[j].size);
+        p += E.row[j].size;
+        *p = '\n';
+        p++;
+    }
+
+    return buf;
+}
+
 void editorOpen(char* filename) {
     free(E.filename);
     E.filename = strdup(filename);
@@ -317,6 +337,23 @@ void editorOpen(char* filename) {
     fclose(fp);
     
 }
+
+void editorSave(void) {
+
+    if(E.filename == NULL) return;
+
+    int len;
+    char* buf = editorRowsToString(&len);
+
+    int fd = open(E.filename, O_RDWR | O_CREAT, 0644);
+    ftruncate(fd, len);
+    write(fd, buf, len);
+    close(fd);
+    free(buf);
+}
+/* 
+The normal way to overwrite a file is to pass the O_TRUNC flag to open(), which truncates the file completely, making it an empty file, before writing the new data into it. By truncating the file ourselves to the same length as the data we are planning to write into it, we are making the whole overwriting operation a little bit safer in case the ftruncate() call succeeds but the write() call fails. In that case, the file would still contain most of the data it had before. But if the file was truncated completely by the open() call and then the write() failed, you’d end up with all of your data lost.
+*/
 
 /*** append buffer ***/
 
@@ -539,6 +576,11 @@ void editorProcessKeyPress(void) {
             exit(0);
             break;
 
+        case CTRL_KEY('s'):
+            editorSave();
+            break;
+
+
         case HOME_KEY:
             E.cx = 0;
             break;
@@ -585,7 +627,7 @@ void editorProcessKeyPress(void) {
 
         case CTRL_KEY('l'):
         case '\x1b':
-            break
+            break;
         
         default:
             editorInsertChar(c);
